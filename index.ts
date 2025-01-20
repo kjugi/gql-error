@@ -31,17 +31,20 @@ const typeDefs = `#graphql
         notFound: Response # 404 not found
         authenticationFail: Response # 403 auth
         givenCode(code: Int!): Response # returns error with given error code
-        serviceUnavailable: Response # 503 i.e. from CDN
-        combinedError: Response
-        networkError: Response
         requestTimeout(time: Int!): Response # waits for given seconds and timeouts
         other: Response # for example TypeError returned - not expected on FE side
         antiPattern: AntiPatternResponse
         gqlError: Body
+        nonGqlError: Body
+        networkError: Response
+        # serviceUnavailable - mitigate 503 from CDN example
+        # combinedError
     }
 `;
 
 // A map of functions which return data for the schema.
+// ApolloServerErrorCode
+// ApolloServerValidationErrorCode
 const resolvers = {
   Query: {
     notFound: () => {
@@ -51,6 +54,72 @@ const resolvers = {
           code: "NOT_FOUND",
         },
       });
+    },
+    authenticationFail: () => {
+      return new GraphQLError(
+        "You are not authorized to perform this action.",
+        {
+          extensions: {
+            code: "FORBIDDEN",
+          },
+        }
+      );
+    },
+    givenCode: (_, args) => {
+      if (!args.code) {
+        throw new GraphQLError("no error code", {
+          extensions: {
+            code: ApolloServerErrorCode.BAD_USER_INPUT,
+          },
+        });
+      }
+
+      throw new GraphQLError("error with code from arg", {
+        extensions: {
+          code: ApolloServerErrorCode.BAD_REQUEST,
+          http: {
+            status: args.code || 500,
+          },
+        },
+      });
+    },
+    requestTimeout: async (_, args) => {
+      if (!args.time) {
+        throw new GraphQLError("no error code", {
+          extensions: {
+            code: ApolloServerErrorCode.BAD_USER_INPUT,
+          },
+        });
+      }
+
+      await new Promise((_, reject) => {
+        setTimeout(reject, args.time);
+      }).catch(() => {
+        throw new GraphQLError("Request timeout", {
+          extensions: {
+            code: ApolloServerErrorCode.INTERNAL_SERVER_ERROR,
+            // This causes 10 retries by default
+            // http: {
+            //   status: 408,
+            // },
+          },
+        });
+      });
+    },
+    networkError: () => {
+      throw new GraphQLError("Request timeout", {
+        extensions: {
+          code: ApolloServerErrorCode.INTERNAL_SERVER_ERROR,
+          // This returns networkError after 10 retries
+          http: {
+            status: 408,
+          },
+        },
+      });
+    },
+    // unhandledError: () => {},
+    other: () => {
+      return new TypeError("not expected type error");
     },
     antiPattern: () => {
       return {
@@ -62,11 +131,14 @@ const resolvers = {
       };
     },
     gqlError: () => {
-      throw new GraphQLError("Custom error", {
+      throw new GraphQLError("Custom graphql error", {
         extensions: {
           code: "GQL_ERROR",
         },
       });
+    },
+    nonGqlError: () => {
+      throw new Error("custom error code");
     },
   },
 };
@@ -80,6 +152,24 @@ const main = async () => {
     typeDefs,
     resolvers,
     plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
+    // formatError: (formattedError, error) => {
+    //   // Return a different error message
+
+    //   if (
+    //     formattedError.extensions.code ===
+    //     ApolloServerErrorCode.GRAPHQL_VALIDATION_FAILED
+    //   ) {
+    //     return {
+    //       ...formattedError,
+    //       message:
+    //         "Your query doesn't match the schema. Try double-checking it!",
+    //     };
+    //   }
+    //   // Otherwise return the formatted error. This error can also
+    //   // be manipulated in other ways, as long as it's returned.
+
+    //   return formattedError;
+    // },
   });
   await server.start();
 
