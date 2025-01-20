@@ -6,6 +6,12 @@ import http from "http";
 import cors from "cors";
 import bodyParser from "body-parser";
 import { GraphQLError } from "graphql";
+import {
+  ApolloServerErrorCode,
+  ApolloServerValidationErrorCode,
+} from "@apollo/server/errors";
+import path from "node:path";
+import { renderFile } from "ejs";
 
 // The GraphQL schema
 const typeDefs = `#graphql
@@ -77,7 +83,16 @@ const main = async () => {
   });
   await server.start();
 
-  app.use(cors(), bodyParser.json(), expressMiddleware(server));
+  app.set("views", path.join("views"));
+  app.engine("html", renderFile);
+  app.set("view engine", "html");
+  app.use(cors(), bodyParser.json());
+  app.use("/api/query", expressMiddleware(server));
+  // error route where we return HTML markup
+  app.get("/", (_, res) => {
+    // res.status(500).send({ error: "something blew up" });
+    res.status(500).render("index");
+  });
 
   await new Promise((resolve) =>
     httpServer.listen({ port: 4000 }, () => resolve)
